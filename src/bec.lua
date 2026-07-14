@@ -14,6 +14,9 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
+local VERSION = "1.0.0"
+local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
+
 -- === AUTO-DISCOVERY ===
 -- Find machines among all gt_machine components by internal name
 local ENTANGLER_NAME = "multi.bec.generator"
@@ -43,8 +46,12 @@ end
 local rs = component.redstone
 local gpu = component.gpu
 
-local SIDE_IONODE_PAUSE = sides.up      -- Controller Hatch on IO Node stocking input bus
-local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler, toggle bus on dual interfaces
+-- IO Node is fed by a Stocking Input Bus - setWorkAllowed() is a soft pause
+-- (finishes current recipe first) and the bus keeps pushing items in the
+-- meantime, which overflows/voids. Must use the Controller Hatch's
+-- "Pause Immediately" mode via redstone instead. Entangler is fine via OC.
+local SIDE_IONODE_PAUSE = sides.up      -- Controller Hatch on IO Node (Pause Immediately)
+local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler
 local SIDE_CONDENSATE_SENSOR = sides.west -- input: signal = there is liquid/condensate in the BEC
 
 local MAX_LOG_LINES = 10
@@ -80,6 +87,72 @@ local function addLog(msg)
     table.insert(logLines, 1, string.format("[%s] %s", timestamp(), msg))
     while #logLines > MAX_LOG_LINES do
         table.remove(logLines)
+    end
+end
+
+-- === UPDATE CHECK ===
+-- Non-blocking best-effort check against VERSION_URL. Never fatal: no
+-- internet card, no connectivity, or a slow/dead server just gets logged
+-- and the script carries on running the version it already has.
+local UPDATE_CHECK_TIMEOUT = 5
+
+local function checkForUpdate()
+    if not component.isAvailable("internet") then
+        addLog("update check: no internet card, skipped")
+        return
+    end
+
+    local internet = component.internet
+    local ok, handle = pcall(internet.request, VERSION_URL)
+    if not ok or not handle then
+        addLog("update check: request failed")
+        return
+    end
+
+    local deadline = computer.uptime() + UPDATE_CHECK_TIMEOUT
+    local connected = false
+    while computer.uptime() < deadline do
+        local success, reason = handle.finishConnect()
+        if success then
+            connected = true
+            break
+        end
+        if reason then
+            handle.close()
+            addLog("update check: " .. tostring(reason))
+            return
+        end
+        os.sleep(0.05)
+    end
+
+    if not connected then
+        handle.close()
+        addLog("update check: timeout")
+        return
+    end
+
+    local code = handle.response()
+    if code ~= 200 then
+        handle.close()
+        addLog(string.format("update check: HTTP %s", tostring(code)))
+        return
+    end
+
+    local chunks = {}
+    while true do
+        local chunk = handle.read()
+        if not chunk then break end
+        table.insert(chunks, chunk)
+    end
+    handle.close()
+
+    local latest = table.concat(chunks):gsub("^%s+", ""):gsub("%s+$", "")
+    if latest == "" then
+        addLog("update check: empty VERSION response")
+    elseif latest == VERSION then
+        addLog(string.format("up to date (v%s)", VERSION))
+    else
+        addLog(string.format("UPDATE AVAILABLE: v%s -> v%s, run install_bec", VERSION, latest))
     end
 end
 
@@ -145,7 +218,7 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
     gpu.fill(1, 1, w, STATUS_HEIGHT, " ")
 
     term.setCursor(1, 1)
-    print("=== BEC THROTTLE ===")
+    print(string.format("=== BEC THROTTLE v%s ===", VERSION))
     term.setCursor(1, 2)
     print(string.format("IO   %d / %d", ioProgress, ioMax))
     term.setCursor(1, 3)
@@ -174,7 +247,8 @@ end
 
 -- === INITIALIZATION ===
 term.clear()
-addLog("start")
+addLog(string.format("start (v%s)", VERSION))
+pcall(checkForUpdate)
 
 local okIo, initIoProgress = pcall(function() return io_node.getWorkProgress() end)
 lastIoProgress = okIo and initIoProgress or 0

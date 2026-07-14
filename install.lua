@@ -2,11 +2,12 @@
     BEC Throttle Installer
     Author: corexis
 
-    Downloads bec_throttle.lua from GitHub and installs it to /home.
+    Downloads bec_throttle.lua from GitHub, installs it to /home, and
+    registers it to autostart via /home/.shrc.
     Requires an Internet Card in the computer/server rack.
 
     Usage (one-liner on a fresh OC computer):
-      wget -f https://raw.githubusercontent.com/<USER>/<REPO>/<BRANCH>/install.lua /home/install.lua && install
+      wget -f https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua /home/install_bec.lua && install_bec
 --]]
 
 local component = require("component")
@@ -94,7 +95,44 @@ if not filesystem.exists(INSTALL_PATH) then
 end
 
 print("[installer] Done. Script installed to " .. INSTALL_PATH)
+
+-- === AUTOSTART ===
+-- OpenOS sources /home/.shrc every time an interactive shell starts, which
+-- happens automatically on boot. Appending the command here makes the
+-- computer launch straight into bec_throttle after every reboot.
+local AUTOSTART_CMD = "bec_throttle"
+local SHRC_PATH = "/home/.shrc"
+
+local function setupAutostart()
+    local existing = ""
+    if filesystem.exists(SHRC_PATH) then
+        local rf = io.open(SHRC_PATH, "r")
+        if rf then
+            existing = rf:read("*a") or ""
+            rf:close()
+        end
+    end
+
+    if existing:find(AUTOSTART_CMD, 1, true) then
+        print("[installer] Autostart already configured in " .. SHRC_PATH)
+        return
+    end
+
+    local wf, openErr = io.open(SHRC_PATH, "a")
+    if not wf then
+        print("[installer] WARNING: could not update " .. SHRC_PATH .. ": " .. tostring(openErr))
+        print("[installer] Add this line manually: " .. AUTOSTART_CMD)
+        return
+    end
+    wf:write("\n" .. AUTOSTART_CMD .. "\n")
+    wf:close()
+    print("[installer] Autostart configured: added '" .. AUTOSTART_CMD .. "' to " .. SHRC_PATH)
+end
+
+setupAutostart()
+
 print("[installer] Before running it, edit these in the file to match your setup:")
 print("  - ENTANGLER_NAME / IONODE_NAME (must match your machine names)")
 print("  - SIDE_IONODE_PAUSE / SIDE_ENTANGLER / SIDE_GATE / SIDE_CONDENSATE_SENSOR")
-print("[installer] Run it with:  bec_throttle")
+print("[installer] The computer will now auto-start bec_throttle on every reboot.")
+print("[installer] Run it manually with:  bec_throttle")
