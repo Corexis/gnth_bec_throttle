@@ -17,6 +17,11 @@ local filesystem = require("filesystem")
 local SCRIPT_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/bec.lua"
 local INSTALL_PATH = "/home/bec_throttle.lua"
 
+-- uninstaller gets installed alongside bec_throttle.lua so it's always
+-- available for the user to run later, whenever they want
+local UNINSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/uninstall.lua"
+local UNINSTALL_PATH = "/home/uninstall_bec.lua"
+
 local function fail(msg)
     io.stderr:write("[installer] " .. msg .. "\n")
     os.exit(1)
@@ -96,6 +101,22 @@ end
 
 print("[installer] Done. Script installed to " .. INSTALL_PATH)
 
+-- === UNINSTALLER ===
+print("[installer] Downloading uninstall_bec.lua ...")
+local uninstallBody, uErr = httpGet(UNINSTALL_URL)
+if uninstallBody then
+    local uf, uOpenErr = io.open(UNINSTALL_PATH, "w")
+    if uf then
+        uf:write(uninstallBody)
+        uf:close()
+        print("[installer] Uninstaller saved to " .. UNINSTALL_PATH .. " (run it anytime with: uninstall_bec)")
+    else
+        print("[installer] WARNING: could not save uninstaller: " .. tostring(uOpenErr))
+    end
+else
+    print("[installer] WARNING: could not fetch uninstaller: " .. tostring(uErr))
+end
+
 -- === AUTOSTART ===
 -- OpenOS sources /home/.shrc every time an interactive shell starts, which
 -- happens automatically on boot. Appending the command here makes the
@@ -136,3 +157,13 @@ print("  - ENTANGLER_NAME / IONODE_NAME (must match your machine names)")
 print("  - SIDE_IONODE_PAUSE / SIDE_ENTANGLER / SIDE_GATE / SIDE_CONDENSATE_SENSOR")
 print("[installer] The computer will now auto-start bec_throttle on every reboot.")
 print("[installer] Run it manually with:  bec_throttle")
+print("[installer] To remove everything later, run:  uninstall_bec")
+
+-- === SELF-CLEANUP ===
+-- Best-effort removal of the installer itself, so it doesn't linger in
+-- /home. Assumes the documented usage (saved as /home/install_bec.lua).
+local SELF_PATH = "/home/install_bec.lua"
+if filesystem.exists(SELF_PATH) then
+    print("[installer] Cleaning up installer file...")
+    pcall(function() filesystem.remove(SELF_PATH) end)
+end
