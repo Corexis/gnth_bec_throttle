@@ -14,8 +14,9 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.0.1"
+local VERSION = "1.0.2"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
+local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
 -- === AUTO-DISCOVERY ===
 -- Find machines among all gt_machine components by internal name
@@ -157,7 +158,8 @@ local function checkForUpdate()
     elseif latest == VERSION then
         addLog(string.format("up to date (v%s)", VERSION))
     else
-        addLog(string.format("UPDATE AVAILABLE: v%s -> v%s, run install_bec", VERSION, latest))
+        addLog(string.format("UPDATE AVAILABLE: v%s -> v%s", VERSION, latest))
+        addLog("wget -f " .. INSTALL_URL .. " /home/install_bec.lua && install_bec")
     end
 end
 
