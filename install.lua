@@ -6,7 +6,7 @@
     Requires an Internet Card in the computer/server rack.
 
     Usage (one-liner on a fresh OC computer):
-      wget -f https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/main/install.lua /home/install.lua && install
+      wget -f https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua /home/install_bec.lua && install_bec
 --]]
 
 local component = require("component")
@@ -14,7 +14,7 @@ local shell = require("shell")
 local filesystem = require("filesystem")
 
 -- EDIT THIS: raw URL of bec_throttle.lua in your repo
-local SCRIPT_URL = "https://raw.githubusercontent.com/<USER>/<REPO>/<BRANCH>/bec_throttle.lua"
+local SCRIPT_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/bec.lua"
 local INSTALL_PATH = "/home/bec_throttle.lua"
 
 local function fail(msg)
