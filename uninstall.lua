@@ -54,6 +54,7 @@ local function removeAutostart()
         return
     end
 
+    -- trim trailing blank lines left behind by the removal
     while #kept > 0 and kept[#kept] == "" do
         table.remove(kept)
     end

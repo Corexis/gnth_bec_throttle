@@ -162,6 +162,8 @@ print("[installer] To remove everything later, run:  uninstall_bec")
 -- === SELF-CLEANUP ===
 -- Best-effort removal of the installer itself, so it doesn't linger in
 -- /home. Assumes the documented usage (saved as /home/install_bec.lua).
+-- If it was saved under a different name, this silently does nothing -
+-- the person can just delete it by hand.
 local SELF_PATH = "/home/install_bec.lua"
 if filesystem.exists(SELF_PATH) then
     print("[installer] Cleaning up installer file...")

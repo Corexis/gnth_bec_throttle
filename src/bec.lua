@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.0.0"
+local VERSION = "1.0.1"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 
 -- === AUTO-DISCOVERY ===
@@ -70,14 +70,14 @@ local gateOpen = nil
 local entanglerEverStarted = false
 local entanglerIdleTicks = 0
 local IDLE_CONFIRM_TICKS = 20  -- ~1 second at os.sleep(0.05); how many consecutive ticks of 0/0
--- are needed to consider the batch actually finished
+                                 -- are needed to consider the batch actually finished
 local pendingAssembleAt = nil
 local FLUSH_DELAY = 2  -- extra seconds to let the liquid move from the BEC Hatch into
--- the network after the confirmed idle state
+                        -- the network after the confirmed idle state
 
 local stuckSince = nil
 local WATCHDOG_TIMEOUT = 20  -- seconds both machines can idle without condensate before
--- forcing a transition into BATCHING (only checked while gate is closed)
+                              -- forcing a transition into BATCHING (only checked while gate is closed)
 
 local function timestamp()
     return os.date("%H:%M:%S")
@@ -103,7 +103,12 @@ local function checkForUpdate()
     end
 
     local internet = component.internet
-    local ok, handle = pcall(internet.request, VERSION_URL)
+    -- cache-bust: raw.githubusercontent.com sits behind a CDN that caches
+    -- responses for a few minutes, so a plain request can return a stale
+    -- VERSION file right after a push. A varying query string forces a
+    -- fresh fetch.
+    local bustedUrl = VERSION_URL .. "?_=" .. tostring(math.floor(computer.uptime() * 1000))
+    local ok, handle = pcall(internet.request, bustedUrl)
     if not ok or not handle then
         addLog("update check: request failed")
         return
@@ -231,10 +236,10 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
         watchdogText = string.format("%ds", math.floor(computer.uptime() - stuckSince))
     end
     print(string.format("Ent: %s  IO stop: %s  Gate: %s  watchdog: %s",
-            state == "BATCHING" and "run" or "stop",
-            state == "BATCHING" and "yes" or "no",
-            gateOpen and "open" or "closed",
-            watchdogText))
+        state == "BATCHING" and "run" or "stop",
+        state == "BATCHING" and "yes" or "no",
+        gateOpen and "open" or "closed",
+        watchdogText))
     term.setCursor(1, 6)
     print(string.rep("-", w))
 
