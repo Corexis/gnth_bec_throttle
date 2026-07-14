@@ -6,11 +6,10 @@
     Requires an Internet Card in the computer/server rack.
 
     Usage (one-liner on a fresh OC computer):
-      wget -f https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua /home/install_bec.lua && install_bec
+      wget -f https://raw.githubusercontent.com/<USER>/<REPO>/<BRANCH>/install.lua /home/install.lua && install
 --]]
 
 local component = require("component")
-local shell = require("shell")
 local filesystem = require("filesystem")
 
 -- EDIT THIS: raw URL of bec_throttle.lua in your repo
@@ -26,18 +25,72 @@ if not component.isAvailable("internet") then
     fail("No Internet Card found. Install one and rerun this script.")
 end
 
+local internet = component.internet
+
+-- Direct HTTP GET via the internet card, with an explicit response-code
+-- check. shell.execute("wget ...") can report success even when the HTTP
+-- request itself failed, and filesystem.exists() alone can't tell a fresh
+-- download from a stale file left over from a previous run.
+local function httpGet(url)
+    local handle, err = internet.request(url)
+    if not handle then
+        return nil, tostring(err)
+    end
+
+    while true do
+        local ok, reason = handle.finishConnect()
+        if ok then break end
+        if reason then
+            handle.close()
+            return nil, tostring(reason)
+        end
+        os.sleep(0.05)
+    end
+
+    local code, message = handle.response()
+    if code ~= 200 then
+        handle.close()
+        return nil, string.format("HTTP %s %s", tostring(code), tostring(message))
+    end
+
+    local chunks = {}
+    while true do
+        local chunk = handle.read()
+        if not chunk then break end
+        table.insert(chunks, chunk)
+    end
+    handle.close()
+
+    local body = table.concat(chunks)
+    if #body == 0 then
+        return nil, "empty response body"
+    end
+    return body
+end
+
 if filesystem.exists(INSTALL_PATH) then
     local backupPath = INSTALL_PATH .. ".bak"
     print(string.format("[installer] Existing file found, backing up to %s", backupPath))
     filesystem.remove(backupPath)
     filesystem.copy(INSTALL_PATH, backupPath)
+    filesystem.remove(INSTALL_PATH)
 end
 
 print("[installer] Downloading bec_throttle.lua ...")
-local ok, exitCode = shell.execute(string.format('wget -f "%s" "%s"', SCRIPT_URL, INSTALL_PATH))
+local body, err = httpGet(SCRIPT_URL)
+if not body then
+    fail("Download failed: " .. err .. ". Check the Internet Card allowlist and SCRIPT_URL.")
+end
 
-if not ok or not filesystem.exists(INSTALL_PATH) then
-    fail("Download failed. Check the Internet Card allowlist and SCRIPT_URL.")
+local f, openErr = io.open(INSTALL_PATH, "w")
+if not f then
+    fail("Could not write " .. INSTALL_PATH .. ": " .. tostring(openErr))
+end
+f:write(body)
+f:close()
+
+if not filesystem.exists(INSTALL_PATH) then
+    fail("Write verification failed - file missing after save.")
 end
 
 print("[installer] Done. Script installed to " .. INSTALL_PATH)
