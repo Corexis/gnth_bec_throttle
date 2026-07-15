@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.1.0"
+local VERSION = "1.1.1"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
@@ -49,9 +49,11 @@ local gpu = component.gpu
 
 -- IO Node is fed by a Stocking Input Bus - setWorkAllowed() is a soft pause
 -- (finishes current recipe first) and the bus keeps pushing items in the
--- meantime, which overflows/voids. Must use the Controller Hatch's
--- "Pause Immediately" mode via redstone instead. Entangler is fine via OC.
-local SIDE_IONODE_PAUSE = sides.up      -- Controller Hatch on IO Node (Pause Immediately)
+-- meantime, which overflows/voids. Must disable the bus itself via redstone
+-- instead. Entangler is fine via OC.
+local SIDE_IONODE_PAUSE = sides.up      -- Wireless Machine Controller Cover on the IO Node's
+                                         -- Stocking Input Bus, "Enable with Redstone" mode
+                                         -- (signal present = bus enabled, no signal = disabled)
 local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler
 local SIDE_CONDENSATE_SENSOR = sides.west -- input: signal = there is liquid/condensate in the BEC
 local SIDE_RESOURCES_READY = sides.north  -- input: signal = AE has delivered the raw batch
@@ -189,8 +191,11 @@ local function setMachineWork(proxy, label, allowed)
 end
 
 local function setIoNodePaused(paused)
-    -- Controller Hatch, Pause Immediately mode: redstone signal = paused
-    rs.setOutput(SIDE_IONODE_PAUSE, paused and 15 or 0)
+    -- Wireless Machine Controller Cover on the Stocking Input Bus,
+    -- "Enable with Redstone" mode: signal present = bus enabled/feeding,
+    -- no signal = bus disabled/paused. Inverse of a Controller Hatch's
+    -- "Pause Immediately" mode, which this used to assume.
+    rs.setOutput(SIDE_IONODE_PAUSE, paused and 0 or 15)
 end
 
 local function setGate(open)
