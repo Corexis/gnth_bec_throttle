@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.0.2"
+local VERSION = "1.1.0"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
@@ -54,6 +54,9 @@ local gpu = component.gpu
 local SIDE_IONODE_PAUSE = sides.up      -- Controller Hatch on IO Node (Pause Immediately)
 local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler
 local SIDE_CONDENSATE_SENSOR = sides.west -- input: signal = there is liquid/condensate in the BEC
+local SIDE_RESOURCES_READY = sides.north  -- input: signal = AE has delivered the raw batch
+                                           -- to the Entangler (e.g. an ME Level Emitter
+                                           -- watching the recipe's input items/fluids)
 
 local MAX_LOG_LINES = 10
 local STATUS_HEIGHT = 6
@@ -75,6 +78,16 @@ local IDLE_CONFIRM_TICKS = 20  -- ~1 second at os.sleep(0.05); how many consecut
 local pendingAssembleAt = nil
 local FLUSH_DELAY = 2  -- extra seconds to let the liquid move from the BEC Hatch into
                         -- the network after the confirmed idle state
+
+-- Entangler stays OFF by default when entering BATCHING. It only turns on
+-- once SIDE_RESOURCES_READY confirms AE has actually delivered the batch -
+-- this avoids racing a fast Entangler against a still-arriving batch.
+-- MATERIALS_WAIT_TIMEOUT is a safety fallback: if the signal never arrives
+-- (sensor misconfigured, AE stalled, etc.) the Entangler starts anyway
+-- after this many seconds so the system doesn't deadlock.
+local awaitingMaterials = false
+local materialsWaitSince = nil
+local MATERIALS_WAIT_TIMEOUT = 30
 
 local stuckSince = nil
 local WATCHDOG_TIMEOUT = 20  -- seconds both machines can idle without condensate before
@@ -196,12 +209,14 @@ end
 local function enterBatching()
     state = "BATCHING"
     setIoNodePaused(true)
-    setMachineWork(entangler, "entangler", true)
+    setMachineWork(entangler, "entangler", false)
     setGate(true)
     entanglerEverStarted = false
     entanglerIdleTicks = 0
     pendingAssembleAt = nil
-    addLog("BATCHING | IO stop, Ent run, gate open")
+    awaitingMaterials = true
+    materialsWaitSince = computer.uptime()
+    addLog("BATCHING | IO stop, gate open, awaiting resources")
 end
 
 local function enterAssembling()
@@ -218,6 +233,10 @@ local function hasCondensate()
     return rs.getInput(SIDE_CONDENSATE_SENSOR) > 0
 end
 
+local function hasResourcesReady()
+    return rs.getInput(SIDE_RESOURCES_READY) > 0
+end
+
 local function drawStatus(ioProgress, ioMax, entProgress, entMax)
     local w, h = gpu.getResolution()
 
@@ -231,14 +250,19 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
     term.setCursor(1, 3)
     print(string.format("Ent  %d / %d", entProgress, entMax))
     term.setCursor(1, 4)
-    print(string.format("mode: %s", state))
+    local modeText = state
+    if state == "BATCHING" then
+        modeText = awaitingMaterials and "BATCHING (awaiting resources)" or "BATCHING (processing)"
+    end
+    print(string.format("mode: %s", modeText))
     term.setCursor(1, 5)
     local watchdogText = "-"
     if stuckSince then
         watchdogText = string.format("%ds", math.floor(computer.uptime() - stuckSince))
     end
+    local entRunning = state == "BATCHING" and not awaitingMaterials
     print(string.format("Ent: %s  IO stop: %s  Gate: %s  watchdog: %s",
-        state == "BATCHING" and "run" or "stop",
+        entRunning and "run" or "stop",
         state == "BATCHING" and "yes" or "no",
         gateOpen and "open" or "closed",
         watchdogText))
@@ -313,30 +337,47 @@ while true do
             end
 
         elseif state == "BATCHING" then
-            -- Entangler picked up the batch and started working - close the gate,
-            -- no more raw material is needed
-            if okEntM and entMax > 0 and gateOpen then
-                setGate(false)
-            end
-
-            if okEntM and entMax > 0 then
-                entanglerEverStarted = true
-                entanglerIdleTicks = 0
-                if pendingAssembleAt then
-                    pendingAssembleAt = nil
-                    addLog("Ent active again, cancelling transition")
+            if awaitingMaterials then
+                -- Phase 1: gate stays open, Entangler stays off, until AE
+                -- confirms the raw batch has actually arrived. Starting the
+                -- Entangler before that (e.g. reacting to entMax>0) races a
+                -- fast Entangler against a still-arriving delivery and can
+                -- overflow/void it.
+                if hasResourcesReady() then
+                    awaitingMaterials = false
+                    setGate(false)
+                    setMachineWork(entangler, "entangler", true)
+                    addLog("resources ready, gate closed, entangler started")
+                elseif computer.uptime() - materialsWaitSince >= MATERIALS_WAIT_TIMEOUT then
+                    awaitingMaterials = false
+                    setGate(false)
+                    setMachineWork(entangler, "entangler", true)
+                    addLog(string.format("materials wait timeout (%ds), starting entangler anyway", MATERIALS_WAIT_TIMEOUT))
                 end
-            elseif okEntM and entMax == 0 and entanglerEverStarted then
-                entanglerIdleTicks = entanglerIdleTicks + 1
+            else
+                -- Phase 2: Entangler is running - wait for it to go
+                -- genuinely idle (it may run through several recipes
+                -- back-to-back from the delivered batch) before switching
+                -- back to ASSEMBLING.
+                if okEntM and entMax > 0 then
+                    entanglerEverStarted = true
+                    entanglerIdleTicks = 0
+                    if pendingAssembleAt then
+                        pendingAssembleAt = nil
+                        addLog("Ent active again, cancelling transition")
+                    end
+                elseif okEntM and entMax == 0 and entanglerEverStarted then
+                    entanglerIdleTicks = entanglerIdleTicks + 1
 
-                if entanglerIdleTicks >= IDLE_CONFIRM_TICKS and not pendingAssembleAt then
-                    pendingAssembleAt = computer.uptime() + FLUSH_DELAY
-                    addLog(string.format("idle confirmed, flush wait %ds", FLUSH_DELAY))
-                end
+                    if entanglerIdleTicks >= IDLE_CONFIRM_TICKS and not pendingAssembleAt then
+                        pendingAssembleAt = computer.uptime() + FLUSH_DELAY
+                        addLog(string.format("idle confirmed, flush wait %ds", FLUSH_DELAY))
+                    end
 
-                if pendingAssembleAt and computer.uptime() >= pendingAssembleAt then
-                    addLog("batch done (confirmed)")
-                    enterAssembling()
+                    if pendingAssembleAt and computer.uptime() >= pendingAssembleAt then
+                        addLog("batch done (confirmed)")
+                        enterAssembling()
+                    end
                 end
             end
         end
