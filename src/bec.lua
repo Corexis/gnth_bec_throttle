@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.2.0"
+local VERSION = "1.2.1"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
@@ -66,11 +66,11 @@ local io_node, ioNodeAddr = findMachine(IONODE_NAME, IONODE_TYPES)
 
 if not entangler then
     error("Entangler not found (tried gt_machine name '" .. ENTANGLER_NAME .. "' and types: "
-            .. table.concat(ENTANGLER_TYPES, ", ") .. "). Check component.list('gt_machine').")
+        .. table.concat(ENTANGLER_TYPES, ", ") .. "). Check component.list('gt_machine').")
 end
 if not io_node then
     error("IO Node not found (tried gt_machine name '" .. IONODE_NAME .. "' and types: "
-            .. table.concat(IONODE_TYPES, ", ") .. "). Check component.list('gt_machine').")
+        .. table.concat(IONODE_TYPES, ", ") .. "). Check component.list('gt_machine').")
 end
 
 local rs = component.redstone
@@ -81,13 +81,13 @@ local gpu = component.gpu
 -- meantime, which overflows/voids. Must disable the bus itself via redstone
 -- instead. Entangler is fine via OC.
 local SIDE_IONODE_PAUSE = sides.up      -- Wireless Machine Controller Cover on the IO Node's
--- Stocking Input Bus, "Enable with Redstone" mode
--- (signal present = bus enabled, no signal = disabled)
+                                         -- Stocking Input Bus, "Enable with Redstone" mode
+                                         -- (signal present = bus enabled, no signal = disabled)
 local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler
 local SIDE_CONDENSATE_SENSOR = sides.west -- input: signal = there is liquid/condensate in the BEC
 local SIDE_RESOURCES_READY = sides.north  -- input: signal = AE has delivered the raw batch
--- to the Entangler (e.g. an ME Level Emitter
--- watching the recipe's input items/fluids)
+                                           -- to the Entangler (e.g. an ME Level Emitter
+                                           -- watching the recipe's input items/fluids)
 
 local MAX_LOG_LINES = 10
 local STATUS_HEIGHT = 6
@@ -105,24 +105,27 @@ local gateOpen = nil
 local entanglerEverStarted = false
 local entanglerIdleTicks = 0
 local IDLE_CONFIRM_TICKS = 20  -- ~1 second at os.sleep(0.05); how many consecutive ticks of 0/0
--- are needed to consider the batch actually finished
+                                 -- are needed to consider the batch actually finished
 local pendingAssembleAt = nil
 local FLUSH_DELAY = 2  -- extra seconds to let the liquid move from the BEC Hatch into
--- the network after the confirmed idle state
+                        -- the network after the confirmed idle state
 
 -- Entangler stays OFF by default when entering BATCHING. It only turns on
 -- once SIDE_RESOURCES_READY confirms AE has actually delivered the batch -
 -- this avoids racing a fast Entangler against a still-arriving batch.
--- MATERIALS_WAIT_TIMEOUT is a safety fallback: if the signal never arrives
--- (sensor misconfigured, AE stalled, etc.) the Entangler starts anyway
--- after this many seconds so the system doesn't deadlock.
+-- No forced-start fallback here: if the signal never arrives, forcing the
+-- Entangler on with an empty buffer just leaves entMax stuck at 0 forever,
+-- which deadlocks the state machine worse than simply waiting does. Instead
+-- MATERIALS_WAIT_WARN_INTERVAL just logs a periodic reminder so it's
+-- visible something's off, without touching the gate or the machine.
 local awaitingMaterials = false
 local materialsWaitSince = nil
-local MATERIALS_WAIT_TIMEOUT = 30
+local materialsWaitLastWarnAt = nil
+local MATERIALS_WAIT_WARN_INTERVAL = 120
 
 local stuckSince = nil
 local WATCHDOG_TIMEOUT = 20  -- seconds both machines can idle without condensate before
--- forcing a transition into BATCHING (only checked while gate is closed)
+                              -- forcing a transition into BATCHING (only checked while gate is closed)
 
 local function timestamp()
     return os.date("%H:%M:%S")
@@ -250,6 +253,7 @@ local function enterBatching()
     pendingAssembleAt = nil
     awaitingMaterials = true
     materialsWaitSince = computer.uptime()
+    materialsWaitLastWarnAt = nil
     addLog("BATCHING | IO stop, gate open, awaiting resources")
 end
 
@@ -297,10 +301,10 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
     local entRunning = state == "BATCHING" and not awaitingMaterials
     local ioRunning = state ~= "BATCHING"
     print(string.format("Ent: %s  IO: %s  Gate: %s  watchdog: %s",
-            entRunning and "running" or "stopped",
-            ioRunning and "running" or "paused",
-            gateOpen and "open" or "closed",
-            watchdogText))
+        entRunning and "running" or "stopped",
+        ioRunning and "running" or "paused",
+        gateOpen and "open" or "closed",
+        watchdogText))
     term.setCursor(1, 6)
     print(string.rep("-", w))
 
@@ -379,11 +383,11 @@ while true do
                     setGate(false)
                     setMachineWork(entangler, "entangler", true)
                     addLog("resources ready, gate closed, entangler started")
-                elseif computer.uptime() - materialsWaitSince >= MATERIALS_WAIT_TIMEOUT then
-                    awaitingMaterials = false
-                    setGate(false)
-                    setMachineWork(entangler, "entangler", true)
-                    addLog(string.format("materials wait timeout (%ds), starting entangler anyway", MATERIALS_WAIT_TIMEOUT))
+                elseif not materialsWaitLastWarnAt
+                    or computer.uptime() - materialsWaitLastWarnAt >= MATERIALS_WAIT_WARN_INTERVAL then
+                    materialsWaitLastWarnAt = computer.uptime()
+                    addLog(string.format("still waiting for resources signal (%ds)",
+                        math.floor(computer.uptime() - materialsWaitSince)))
                 end
             else
                 -- Phase 2: Entangler is running - wait for it to go
