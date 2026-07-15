@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.2.1"
+local VERSION = "1.2.3"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
@@ -383,11 +383,6 @@ while true do
                     setGate(false)
                     setMachineWork(entangler, "entangler", true)
                     addLog("resources ready, gate closed, entangler started")
-                elseif not materialsWaitLastWarnAt
-                    or computer.uptime() - materialsWaitLastWarnAt >= MATERIALS_WAIT_WARN_INTERVAL then
-                    materialsWaitLastWarnAt = computer.uptime()
-                    addLog(string.format("still waiting for resources signal (%ds)",
-                        math.floor(computer.uptime() - materialsWaitSince)))
                 end
             else
                 -- Phase 2: Entangler is running - wait for it to go
