@@ -14,7 +14,7 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.2.3"
+local VERSION = "1.2.4"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
@@ -90,7 +90,7 @@ local SIDE_RESOURCES_READY = sides.north  -- input: signal = AE has delivered th
                                            -- watching the recipe's input items/fluids)
 
 local MAX_LOG_LINES = 10
-local STATUS_HEIGHT = 6
+local STATUS_HEIGHT = 7
 
 local logLines = {}
 
@@ -113,15 +113,11 @@ local FLUSH_DELAY = 2  -- extra seconds to let the liquid move from the BEC Hatc
 -- Entangler stays OFF by default when entering BATCHING. It only turns on
 -- once SIDE_RESOURCES_READY confirms AE has actually delivered the batch -
 -- this avoids racing a fast Entangler against a still-arriving batch.
--- No forced-start fallback here: if the signal never arrives, forcing the
+-- No forced-start fallback: if the signal never arrives, forcing the
 -- Entangler on with an empty buffer just leaves entMax stuck at 0 forever,
--- which deadlocks the state machine worse than simply waiting does. Instead
--- MATERIALS_WAIT_WARN_INTERVAL just logs a periodic reminder so it's
--- visible something's off, without touching the gate or the machine.
+-- which deadlocks the state machine worse than simply waiting does.
 local awaitingMaterials = false
 local materialsWaitSince = nil
-local materialsWaitLastWarnAt = nil
-local MATERIALS_WAIT_WARN_INTERVAL = 120
 
 local stuckSince = nil
 local WATCHDOG_TIMEOUT = 20  -- seconds both machines can idle without condensate before
@@ -253,7 +249,6 @@ local function enterBatching()
     pendingAssembleAt = nil
     awaitingMaterials = true
     materialsWaitSince = computer.uptime()
-    materialsWaitLastWarnAt = nil
     addLog("BATCHING | IO stop, gate open, awaiting resources")
 end
 
@@ -306,6 +301,9 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
         gateOpen and "open" or "closed",
         watchdogText))
     term.setCursor(1, 6)
+    print(string.format("raw redstone -> condensate: %d  resources_ready: %d",
+        rs.getInput(SIDE_CONDENSATE_SENSOR), rs.getInput(SIDE_RESOURCES_READY)))
+    term.setCursor(1, 7)
     print(string.rep("-", w))
 
     for i, line in ipairs(logLines) do
