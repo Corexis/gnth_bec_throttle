@@ -14,16 +14,26 @@ local sides = require("sides")
 local term = require("term")
 local computer = require("computer")
 
-local VERSION = "1.1.1"
+local VERSION = "1.2.0"
 local VERSION_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/src/VERSION"
 local INSTALL_URL = "https://raw.githubusercontent.com/Corexis/gnth_bec_throttle/refs/heads/main/install.lua"
 
 -- === AUTO-DISCOVERY ===
--- Find machines among all gt_machine components by internal name
+-- Find machines by internal name among "gt_machine" components (older game
+-- versions expose all GT multiblocks this way), OR by a dedicated
+-- component type (newer versions split some multiblocks - e.g. BEC IO Node
+-- - into their own type, e.g. "bec_io_node", instead of "gt_machine").
+-- Both strategies are tried, in order, so this keeps working across game
+-- version changes without editing the script.
 local ENTANGLER_NAME = "multi.bec.generator"
 local IONODE_NAME = "multi.bec.io-node"
 
-local function findMachine(targetName)
+-- Extra dedicated component types to try if the gt_machine+name lookup
+-- comes up empty. Add more here if the game changes again.
+local ENTANGLER_TYPES = {"bec_generator", "bec_entangler"}
+local IONODE_TYPES = {"bec_io_node"}
+
+local function findByName(targetName)
     for address in component.list("gt_machine") do
         local proxy = component.proxy(address)
         local ok, name = pcall(function() return proxy.getName() end)
@@ -34,14 +44,33 @@ local function findMachine(targetName)
     return nil
 end
 
-local entangler, entanglerAddr = findMachine(ENTANGLER_NAME)
-local io_node, ioNodeAddr = findMachine(IONODE_NAME)
+local function findByType(componentTypes)
+    for _, ctype in ipairs(componentTypes) do
+        for address in component.list(ctype) do
+            return component.proxy(address), address
+        end
+    end
+    return nil
+end
+
+local function findMachine(targetName, fallbackTypes)
+    local proxy, address = findByName(targetName)
+    if proxy then
+        return proxy, address
+    end
+    return findByType(fallbackTypes)
+end
+
+local entangler, entanglerAddr = findMachine(ENTANGLER_NAME, ENTANGLER_TYPES)
+local io_node, ioNodeAddr = findMachine(IONODE_NAME, IONODE_TYPES)
 
 if not entangler then
-    error("Entangler not found (" .. ENTANGLER_NAME .. "). Check component.list('gt_machine').")
+    error("Entangler not found (tried gt_machine name '" .. ENTANGLER_NAME .. "' and types: "
+            .. table.concat(ENTANGLER_TYPES, ", ") .. "). Check component.list('gt_machine').")
 end
 if not io_node then
-    error("IO Node not found (" .. IONODE_NAME .. "). Check component.list('gt_machine').")
+    error("IO Node not found (tried gt_machine name '" .. IONODE_NAME .. "' and types: "
+            .. table.concat(IONODE_TYPES, ", ") .. "). Check component.list('gt_machine').")
 end
 
 local rs = component.redstone
@@ -52,13 +81,13 @@ local gpu = component.gpu
 -- meantime, which overflows/voids. Must disable the bus itself via redstone
 -- instead. Entangler is fine via OC.
 local SIDE_IONODE_PAUSE = sides.up      -- Wireless Machine Controller Cover on the IO Node's
-                                         -- Stocking Input Bus, "Enable with Redstone" mode
-                                         -- (signal present = bus enabled, no signal = disabled)
+-- Stocking Input Bus, "Enable with Redstone" mode
+-- (signal present = bus enabled, no signal = disabled)
 local SIDE_GATE = sides.south           -- gate feeding raw materials into the Entangler
 local SIDE_CONDENSATE_SENSOR = sides.west -- input: signal = there is liquid/condensate in the BEC
 local SIDE_RESOURCES_READY = sides.north  -- input: signal = AE has delivered the raw batch
-                                           -- to the Entangler (e.g. an ME Level Emitter
-                                           -- watching the recipe's input items/fluids)
+-- to the Entangler (e.g. an ME Level Emitter
+-- watching the recipe's input items/fluids)
 
 local MAX_LOG_LINES = 10
 local STATUS_HEIGHT = 6
@@ -76,10 +105,10 @@ local gateOpen = nil
 local entanglerEverStarted = false
 local entanglerIdleTicks = 0
 local IDLE_CONFIRM_TICKS = 20  -- ~1 second at os.sleep(0.05); how many consecutive ticks of 0/0
-                                 -- are needed to consider the batch actually finished
+-- are needed to consider the batch actually finished
 local pendingAssembleAt = nil
 local FLUSH_DELAY = 2  -- extra seconds to let the liquid move from the BEC Hatch into
-                        -- the network after the confirmed idle state
+-- the network after the confirmed idle state
 
 -- Entangler stays OFF by default when entering BATCHING. It only turns on
 -- once SIDE_RESOURCES_READY confirms AE has actually delivered the batch -
@@ -93,7 +122,7 @@ local MATERIALS_WAIT_TIMEOUT = 30
 
 local stuckSince = nil
 local WATCHDOG_TIMEOUT = 20  -- seconds both machines can idle without condensate before
-                              -- forcing a transition into BATCHING (only checked while gate is closed)
+-- forcing a transition into BATCHING (only checked while gate is closed)
 
 local function timestamp()
     return os.date("%H:%M:%S")
@@ -266,11 +295,12 @@ local function drawStatus(ioProgress, ioMax, entProgress, entMax)
         watchdogText = string.format("%ds", math.floor(computer.uptime() - stuckSince))
     end
     local entRunning = state == "BATCHING" and not awaitingMaterials
-    print(string.format("Ent: %s  IO stop: %s  Gate: %s  watchdog: %s",
-        entRunning and "run" or "stop",
-        state == "BATCHING" and "yes" or "no",
-        gateOpen and "open" or "closed",
-        watchdogText))
+    local ioRunning = state ~= "BATCHING"
+    print(string.format("Ent: %s  IO: %s  Gate: %s  watchdog: %s",
+            entRunning and "running" or "stopped",
+            ioRunning and "running" or "paused",
+            gateOpen and "open" or "closed",
+            watchdogText))
     term.setCursor(1, 6)
     print(string.rep("-", w))
 
@@ -292,15 +322,11 @@ lastIoProgress = okIo and initIoProgress or 0
 local okEnt, initEntProgress = pcall(function() return entangler.getWorkProgress() end)
 lastEntanglerProgress = okEnt and initEntProgress or 0
 
--- if the IO Node has no active recipe, start with a batch
-if lastIoProgress == 0 then
-    enterBatching()
-else
-    state = "ASSEMBLING"
-    setMachineWork(entangler, "entangler", false)
-    setIoNodePaused(false)
-    addLog(string.format("start: IO already running (%d)", lastIoProgress))
-end
+-- Always start paused: the IO Node only gets enabled via enterAssembling(),
+-- right after the Entangler has confirmed it finished a batch in this
+-- session - never as a startup assumption, even if the IO Node happened to
+-- already be mid-recipe when the computer (re)booted.
+enterBatching()
 
 -- === MAIN LOOP ===
 while true do
